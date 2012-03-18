@@ -44,7 +44,7 @@ function drupaltodrupal_form_add_instance_validate($form, &$form_state) {
         'address',
         t(
           'Instance with provided address already exists in database, click !link to edit it.',
-          array('!link' => l('here', 'admin/drupaltodrupal/instances/edit/' . $record['id']))
+          array('!link' => l('here', 'admin/drupaltodrupal/instances/' . $record['id'] . '/details'))
         )
       );
     }
@@ -64,7 +64,7 @@ function drupaltodrupal_form_add_instance_submit($form, &$form_state) {
   drupal_set_message(
     t(
       'Instance inserted in database. Click !link to edit it, associate a public key with it and send a friendship request.',
-      array('!link' => l('here', 'admin/drupaltodrupal/instances/edit/' . $id))
+      array('!link' => l('here', 'admin/drupaltodrupal/instances/' . $id . '/details'))
     )
   );
 }
