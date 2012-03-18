@@ -34,3 +34,12 @@ Since D2D is under development and mainly should be a proof of concept, there ar
 With the installation of the module a new public/private key pair will be created. Furthermore, the address under which this instance is reachable is set to `$GLOBALS['base_url'] . '/'`. Note that when installing D2D with drush the `-l` flag should be used, e.g. using the option `-l "http://www.example.com/drupal"`.
 After installing D2D, a new tab called D2D appears in the admins menu. All functionality provided by D2D can be accessed using this tab.
 Note that D2D requires Drupal's cron to be setup correctly and called periodically, e.g. every 15 minutes. See <http://drupal.org/cron> and <http://drupal.org/node/23714> for details on how to setup cron.
+
+
+## License ##
+
+This program is free software: you can redistribute it and/or modify it under the terms of the GNU General Public License as published by the Free Software Foundation, either version 3 of the License, or (at your option) any later version.
+
+This program is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License along with this program.  If not, see <http://www.gnu.org/licenses/>.
