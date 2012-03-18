@@ -1,0 +1,430 @@
+<?php
+/**
+ * @file
+ * Installation file for the Drupal-to-Drupal module.
+ */
+
+require_once 'includes/drupaltodrupal.constants.inc';
+
+
+/**
+ * Implements hook_install()
+ */
+function drupaltodrupal_install() {
+  watchdog('Drupal-to-Drupal', 'hook_install()');
+  $res = openssl_pkey_new();
+  openssl_pkey_export($res, $private_key);
+  $public_key = openssl_pkey_get_details($res);
+  $public_key = $public_key['key'];
+  variable_set('drupaltodrupal_private_key', $private_key);
+  // TODO: save (private) key at different place
+  // TODO: free resources
+
+  // add own instance to database
+  $id = db_insert('drupaltodrupal_instances')->fields(array(
+      'url' => $GLOBALS['base_url'] . '/',
+      'description' => 'this instance.',
+      'time_inserted' => drupaltodrupal_get_time(),
+      'public_key_id' => NULL,
+    ))->execute();
+  $id_pk = db_insert('drupaltodrupal_public_keys')->fields(array(
+      'id_instance' => $id,
+      'public_key' => $public_key,
+    ))->execute();
+  $num_updated = db_update('drupaltodrupal_instances')
+    ->fields(array(
+      'public_key_id' => $id_pk,
+    ))
+    ->condition('id', $id)
+    ->execute();
+  $group_id = db_insert('drupaltodrupal_groups')->fields(array(
+      'name' => 'friends',
+      'description' => 'N/A',
+      'auto_member' => 1,
+    ))->execute();
+  foreach (array('drupaltodrupal_get_friends', 'drupaltodrupal_get_public_key', 'drupaltodrupal_list_permissions') as $method_name) {
+    $m_id = db_insert('drupaltodrupal_permissions')->fields(array(
+      'group_id' => $group_id,
+      'method' => $method_name,
+    ))->execute();
+  }
+  variable_set('drupaltodrupal_instance_id', $id);
+
+  variable_set('drupaltodrupal_utc_offset', DRUPALTODRUPAL_UTC_OFFSET_DEFAULT);
+  variable_set('drupaltodrupal_validity', DRUPALTODRUPAL_VALIDITY_DEFAULT);
+  variable_set('drupaltodrupal_renew_time', DRUPALTODRUPAL_RENEW_TIME_DEFAULT);
+  variable_set('drupaltodrupal_resend_time', DRUPALTODRUPAL_RESEND_TIME_DEFAULT);
+  variable_set('drupaltodrupal_timeout', DRUPALTODRUPAL_TIMEOUT_DEFAULT);
+  variable_set('drupaltodrupal_garbage_time', DRUPALTODRUPAL_GARBAGE_TIME_DEFAULT);
+  variable_set('drupaltodrupal_delta_0', DRUPALTODRUPAL_DELTA_0_DEFAULT);
+  variable_set('drupaltodrupal_delta_1', DRUPALTODRUPAL_DELTA_1_DEFAULT);
+  
+  variable_set('drupaltodrupal_default_request',
+    $GLOBALS['base_url'] === 'http://localhost/drupal_a'
+    ? 'http://localhost/drupal_b/' : 'http://localhost/drupal_a/');
+}
+
+/**
+ * Implements hook_uninstall()
+ */
+function drupaltodrupal_uninstall() {
+  watchdog('Drupal-to-Drupal', 'hook_uninstall()');
+  variable_del('drupaltodrupal_private_key');
+  variable_del('drupaltodrupal_instance_id');
+  variable_del('drupaltodrupal_default_request');
+  variable_del('drupaltodrupal_utc_offset');
+  variable_del('drupaltodrupal_validity');
+  variable_del('drupaltodrupal_renew_time');
+  variable_del('drupaltodrupal_resend_time');
+  variable_del('drupaltodrupal_timeout');
+  variable_del('drupaltodrupal_garbage_time');
+  variable_del('drupaltodrupal_delta_0');
+  variable_del('drupaltodrupal_delta_1');
+  drupal_uninstall_schema('drupaltodrupal');
+}
+
+/**
+ * Implements hook_schema()
+ */
+function drupaltodrupal_schema() {
+  $schema = array();
+  $schema['drupaltodrupal_instances'] = array(
+    'description' => 'Stores information on Drupal instances.',
+    'fields' => array(
+      'id' => array(
+        'type' => 'serial',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+        'description' => 'primary identifier',
+      ),
+      'url' => array(
+        'type' => 'varchar',
+        'length' => DRUPALTODRUPAL_INSTANCE_URL_MAX_LENGTH,
+        'not null' => TRUE,
+        'description' => 'address of the Drupal instance',
+      ),
+      'description' => array(
+        'type' => 'varchar',
+        'length' => DRUPALTODRUPAL_INSTANCE_DESCRIPTION_MAX_LENGTH,
+        'not null' => TRUE,
+        'default' => '',
+        'description' => 'description of the Drupal instance',
+      ),
+      'time_inserted' => array(
+        'type' => 'int',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+        'default' => 0,
+        'description' => 'time this entry was inserted',
+      ),
+      'last_alive' => array(
+        'type' => 'int',
+        'unsigned' => TRUE,
+        'not null' => FALSE,
+        'description' => 'time the Drupal instance was last seen',
+      ),
+      'public_key_id' => array(
+        'type' => 'int',
+        'unsigned' => TRUE,
+        'not null' => FALSE,
+        'description' => 'id of public key belonging to this instance',
+      ),
+    ),
+    'primary key' => array('id'),
+    'unique keys' => array('url' => array('url')),
+  );
+  $schema['drupaltodrupal_public_keys'] = array(
+    'description' => 'Stores information on public keys.',
+    'fields' => array(
+      'id' => array(
+        'type' => 'serial',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+        'description' => 'primary identifier',
+      ),
+      'id_instance' => array(
+        'type' => 'int',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+        'description' => 'id of instance associated with this public key',
+      ),
+      'public_key' => array(
+        'type' => 'varchar',
+        'length' => DRUPALTODRUPAL_PUBLIC_KEY_MAX_LENGTH,
+        'not null' => FALSE,
+        'description' => 'public key',
+      ),
+    ),
+    'primary key' => array('id'),
+  );
+  $schema['drupaltodrupal_friendship_certificates'] = array(
+    'description' => 'Stores certificates on friendship between Drupal instances.',
+    'fields' => array(
+      'fcert_id' => array(
+        'type' => 'serial',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+        'description' => 'primary identifier',
+      ),
+      'id_signer' => array(
+        'type' => 'int',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+        'description' => 'id of the instance signing the certificate',
+      ),
+      'id_friend' => array(
+        'type' => 'int',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+        'description' => 'id of the friend',
+      ),
+      'time_inserted' => array(
+        'type' => 'int',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+        'description' => 'time this entry was inserted into the database',
+      ),
+      'valid' => array(
+        'type' => 'int',
+        'unsigned' => TRUE,
+        'not null' => FALSE,
+        'description' => 'flag indicating whether the certificate is valid w.r.t. the corresponding public keys in the database',
+      ),
+      'valid_until' => array(
+        'type' => 'int',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+        'description' => 'time the friendship expires',
+      ),
+      'certificate' => array(
+        'type' => 'blob',
+        'not null' => FALSE,
+        'description' => 'certificate for the friendship',
+      ),
+    ),
+    'primary key' => array('fcert_id'),
+  );
+  $schema['drupaltodrupal_outgoing_requests'] = array(
+    'description' => 'Stores friendship requests made by this instance.',
+    'fields' => array(
+      'outreq_id' => array(
+        'type' => 'serial',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+        'description' => 'primary identifier',
+      ),
+      'id_offer' => array(
+        'type' => 'int',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+        'description' => 'if of the friendship offered',
+      ),
+      'id_common_friend' => array(
+        'type' => 'int',
+        'unsigned' => TRUE,
+        'not null' => FALSE,
+        'description' => 'id of the common friend',
+      ),
+      'email' => array(
+        'type' => 'varchar',
+        'length' => DRUPALTODRUPAL_EMAIL_MAX_LENGTH,
+        'not null' => TRUE,
+        'default' => '',
+        'description' => 'email address of the requester',
+      ),
+      'message' => array(
+        'type' => 'varchar',
+        'length' => DRUPALTODRUPAL_REQUEST_MESSAGE_MAX_LENGTH,
+        'not null' => TRUE,
+        'default' => '',
+        'description' => 'message attached to request',
+      ),
+      'time_inserted' => array(
+        'type' => 'int',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+        'description' => 'time the request was inserted',
+      ),
+      'state' => array(
+        'type' => 'int',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+        'description' => 'state of the request',
+      ),
+      'reply' => array(
+        'type' => 'int',
+        'unsigned' => FALSE,
+        'not null' => FALSE,
+        'description' => 'reply to the request',
+      ),
+      'next_send' => array(
+        'type' => 'int',
+        'unsigned' => TRUE,
+        'not null' => FALSE,
+        'description' => 'time the request will be sent again',
+      ),
+      'type' => array(
+        'type' => 'int',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+        'description' => 'type of the request',
+      ),
+    ),
+    'primary key' => array('outreq_id'),
+  );
+  $schema['drupaltodrupal_incoming_requests'] = array(
+    'description' => 'Stores friendship requests received.',
+    'fields' => array(
+      'inreq_id' => array(
+        'type' => 'serial',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+        'description' => 'primary identifier',
+      ),
+      'id_offer' => array(
+        'type' => 'int',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+        'description' => 'id of the friendship offered',
+      ),
+      'id_common_friend' => array(
+        'type' => 'int',
+        'unsigned' => TRUE,
+        'not null' => FALSE,
+        'description' => 'id of a common friend',
+      ),
+      'email' => array(
+        'type' => 'varchar',
+        'length' => DRUPALTODRUPAL_EMAIL_MAX_LENGTH,
+        'not null' => TRUE,
+        'default' => '',
+        'description' => 'email address of the requester',
+      ),
+      'message' => array(
+        'type' => 'varchar',
+        'length' => DRUPALTODRUPAL_REQUEST_MESSAGE_MAX_LENGTH,
+        'not null' => TRUE,
+        'default' => '',
+        'description' => 'message attached to request',
+      ),
+      'time_sent' => array(
+        'type' => 'int',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+        'description' => 'time the request was sent',
+      ),
+      'time_received' => array(
+        'type' => 'int',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+        'description' => 'time the request was received',
+      ),
+      'ip' => array(
+        'type' => 'varchar',
+        'length' => DRUPALTODRUPAL_IP_LENGTH,
+        'not null' => TRUE,
+        'default' => '',
+        'description' => 'ip the request came from',
+      ),
+      'request' => array(
+        'type' => 'blob',
+        'not null' => TRUE,
+        'description' => '(encrypted) request',
+      ),
+      'signature' => array(
+        'type' => 'blob',
+        'not null' => TRUE,
+        'description' => 'signature of the request',
+      ),
+      'valid' => array(
+        'type' => 'int',
+        'unsigned' => TRUE,
+        'not null' => FALSE,
+        'description' => 'flag indicating whether the signature is valid w.r.t. the corresponding public key in the database',
+      ),
+      'state' => array(
+        'type' => 'int',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+        'description' => 'state of the request',
+      ),
+      'type' => array(
+        'type' => 'int',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+        'description' => 'type of the request',
+      ),
+    ),
+    'primary key' => array('inreq_id'),
+  );
+  $schema['drupaltodrupal_groups'] = array(
+    'description' => 'Stores information on groups of Drupal instances.',
+    'fields' => array(
+      'id' => array(
+        'type' => 'serial',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+        'description' => 'primary identifier',
+      ),
+      'name' => array(
+        'type' => 'varchar',
+        'length' => DRUPALTODRUPAL_GROUP_NAME_MAX_LENGTH,
+        'not null' => TRUE,
+        'description' => 'name identifying the group',
+      ),
+      'description' => array(
+        'type' => 'varchar',
+        'length' => DRUPALTODRUPAL_GROUP_DESCRIPTION_MAX_LENGTH,
+        'not null' => TRUE,
+        'default' => '',
+        'description' => 'description of the group',
+      ),
+      'auto_member' => array(
+        'type' => 'int',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+        'default' => 0,
+        'description' => 'flag indicating whether a newly added instance should automatically be a member of this group',
+      ),
+    ),
+    'primary key' => array('id'),
+    'unique keys' => array('name' => array('name')),
+  );
+  $schema['drupaltodrupal_permissions'] = array(
+    'description' => 'Stores information on permissions of groups of Drupal instances on remote methods.',
+    'fields' => array(
+      'group_id' => array(
+        'type' => 'int',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+        'description' => 'group id',
+      ),
+      'method' => array(
+        'type' => 'varchar',
+        'length' => DRUPALTODRUPAL_METHOD_NAME_MAX_LENGTH,
+        'not null' => TRUE,
+        'description' => 'name identifying the method',
+      ),
+    ),
+    'primary key' => array('group_id', 'method'),
+  );
+  $schema['drupaltodrupal_group_memberships'] = array(
+    'description' => 'Stores information on of Drupal instances being members of groups.',
+    'fields' => array(
+      'instance_id' => array(
+        'type' => 'int',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+        'description' => 'instance id',
+      ),
+      'group_id' => array(
+        'type' => 'int',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+        'description' => 'group id',
+      ),
+    ),
+    'primary key' => array('instance_id', 'group_id'),
+  );
+  return $schema;
+}

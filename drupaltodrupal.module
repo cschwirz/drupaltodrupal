@@ -1,0 +1,317 @@
+<?php
+
+/**
+ * @file
+ * A module to establish friendship between Drupal instances via Peer-to-Peer.
+ *
+ * A longer description will follow here.
+ */
+
+require_once 'includes/drupaltodrupal.constants.inc';
+
+require_once 'includes/drupaltodrupal.crypto.inc';
+require_once 'includes/drupaltodrupal.form.inc';
+require_once 'includes/drupaltodrupal.misc.inc';
+require_once 'includes/drupaltodrupal.rpc.inc';
+require_once 'includes/drupaltodrupal.util.inc';
+require_once 'includes/drupaltodrupal.edit_group.inc';
+require_once 'includes/drupaltodrupal.edit_instance.inc';
+require_once 'includes/drupaltodrupal.list_friendship_certificates.inc';
+require_once 'includes/drupaltodrupal.list_friends.inc';
+require_once 'includes/drupaltodrupal.list_friends_of_friends.inc';
+require_once 'includes/drupaltodrupal.list_instances.inc';
+require_once 'includes/drupaltodrupal.list_instances_details.inc';
+require_once 'includes/drupaltodrupal.manage_groups.inc';
+require_once 'includes/drupaltodrupal.show_incoming_requests.inc';
+require_once 'includes/drupaltodrupal.show_outgoing_requests.inc';
+require_once 'includes/drupaltodrupal.show_settings.inc';
+require_once 'includes/drupaltodrupal.srpc.inc';
+
+function drupaltodrupal_id_load($ids) {
+  $ids = preg_split("/_/", $ids, 2);
+  if (empty($ids) || sizeof($ids) > 2) {
+    return FALSE;
+  }
+  $id = $ids[0];
+  if (!drupaltodrupal_check_convert_int($id)) {
+    return FALSE;
+  }
+  $id_common_friend = null;
+  if (sizeof($ids) == 2) {
+    $id_common_friend = $ids[1];
+    if (!drupaltodrupal_check_convert_int($id_common_friend)) {
+      return FALSE;
+    }
+  }
+  $result = db_query('SELECT i.id as id, i.url as url, i.description as description, i.time_inserted as time_inserted, i.last_alive as last_alive, p.public_key as public_key, i.public_key_id as public_key_id FROM {drupaltodrupal_instances} i LEFT OUTER JOIN {drupaltodrupal_public_keys} p ON i.public_key_id = p.id WHERE i.id=:id', array(':id' => $id));
+  if ($result->rowCount() == 0) {
+    return FALSE;
+  }
+  $record = $result->fetchObject();
+  $instance = array();
+  $instance['id'] = $id;
+  $instance['id_common_friend'] = $id_common_friend;
+  $instance['url'] = $record->url;
+  $instance['public_key'] = $record->public_key;
+  $instance['public_key_id'] = $record->public_key_id;
+  $instance['description'] = $record->description;
+  $instance['time_inserted'] = $record->time_inserted;
+  $t = drupaltodrupal_get_time();
+  drupaltodrupal_get_self_instance($my_id, $my_url, $my_public_key);
+  $instance['is_me'] = ($id == $my_id);
+  $result = db_query('SELECT MAX(f.valid_until) as verified_until FROM {drupaltodrupal_friendship_certificates} f WHERE f.valid=1 AND f.id_signer=:id_signer AND f.id_friend=:id_friend AND f.valid_until>=:t GROUP BY f.id_signer, f.id_friend', array(':id_signer' => $my_id, ':id_friend' => $id, ':t' => $t));
+  $valid_until_a = null;
+  $valid_until_str_a = '-';
+  if ($record = $result->fetchObject()) {
+    $valid_until_a = $record->verified_until;
+    $valid_until_str_a = drupaltodrupal_get_relative_time($valid_until_a);
+  }
+  $result = db_query('SELECT MAX(f.valid_until) as verified_until FROM {drupaltodrupal_friendship_certificates} f WHERE f.valid=1 AND f.id_signer=:id_signer AND f.id_friend=:id_friend AND f.valid_until>=:t GROUP BY f.id_signer, f.id_friend', array(':id_signer' => $id, ':id_friend' => $my_id, ':t' => $t));
+  $valid_until_b = null;
+  $valid_until_str_b = '-';
+  if ($record = $result->fetchObject()) {
+    $valid_until_b = $record->verified_until;
+    $valid_until_str_b = drupaltodrupal_get_relative_time($valid_until_b);
+  }
+  $instance['valid_until_a'] = $valid_until_a;
+  $instance['valid_until_str_a'] = $valid_until_str_a;
+  $instance['valid_until_b'] = $valid_until_b;
+  $instance['valid_until_str_b'] = $valid_until_str_b;
+  $instance['is_friend'] = ($valid_until_a !== null && $valid_until_b !== null);
+  return $instance;
+}
+/**
+ * Implements hook_menu().
+ */
+function drupaltodrupal_menu() {
+  $items = array();
+  $items['admin/drupaltodrupal'] = array(
+    'title' => 'D2D',
+    'description' => 'Establish friendship with other Drupal instances.',
+    'page callback' => 'drupaltodrupal_list_instances', // TODO
+    'access arguments' => array('administer drupaltodrupal'),
+  );
+  $items['admin/drupaltodrupal/instances'] = array(
+    'title' => 'Instances',
+    'page callback' => 'drupaltodrupal_list_instances',
+    'access arguments' => array('administer drupaltodrupal'),
+    'type' => MENU_DEFAULT_LOCAL_TASK,
+    'weight' => 10,
+  );
+  $items['admin/drupaltodrupal/instances/%drupaltodrupal_id/details'] = array(
+    'title' => 'Details',
+    'page callback' => 'drupaltodrupal_edit_instance_details',
+    'page arguments' => array(3),
+    'access arguments' => array('administer drupaltodrupal'),
+    'type' => MENU_LOCAL_TASK,
+    'weight' => 1,
+  );
+  $items['admin/drupaltodrupal/instances/%drupaltodrupal_id/public_key'] = array(
+    'title' => 'Public Key',
+    'page callback' => 'drupaltodrupal_edit_instance_public_key',
+    'page arguments' => array(3),
+    'access arguments' => array('administer drupaltodrupal'),
+    'type' => MENU_LOCAL_TASK,
+    'weight' => 2,
+  );
+  $items['admin/drupaltodrupal/instances/%drupaltodrupal_id/friendship'] = array(
+    'title' => 'Friendship',
+    'page callback' => 'drupaltodrupal_edit_instance_friendship',
+    'page arguments' => array(3, 5),
+    'access arguments' => array('administer drupaltodrupal'),
+    'type' => MENU_LOCAL_TASK,
+    'weight' => 3,
+  );
+  $items['admin/drupaltodrupal/instances/%drupaltodrupal_id/groups'] = array(
+    'title' => 'Groups',
+    'page callback' => 'drupaltodrupal_edit_instance_groups',
+    'page arguments' => array(3),
+    'access arguments' => array('administer drupaltodrupal'),
+    'type' => MENU_LOCAL_TASK,
+    'weight' => 4,
+  );
+  $items['admin/drupaltodrupal/instances/%drupaltodrupal_id/permissions'] = array(
+    'title' => 'Permissions',
+    'page callback' => 'drupaltodrupal_edit_instance_permissions',
+    'page arguments' => array(3),
+    'access arguments' => array('administer drupaltodrupal'),
+    'type' => MENU_LOCAL_TASK,
+    'weight' => 5,
+  );
+  $items['admin/drupaltodrupal/instances/%drupaltodrupal_id/remote_permissions'] = array(
+    'title' => 'Remote Permissions',
+    'page callback' => 'drupaltodrupal_edit_instance_remote_permissions',
+    'page arguments' => array(3),
+    'access arguments' => array('administer drupaltodrupal'),
+    'type' => MENU_LOCAL_TASK,
+    'weight' => 6,
+  );
+  $items['admin/drupaltodrupal/database'] = array(
+    'title' => 'Database',
+    'page callback' => 'drupaltodrupal_list_friendship_certificates',
+    'access arguments' => array('administer drupaltodrupal'),
+    'type' => MENU_LOCAL_TASK,
+    'weight' => 20,
+  );
+  $items['admin/drupaltodrupal/database/friendship_certificates'] = array(
+    'title' => 'Friendship Certificates',
+    'page callback' => 'drupaltodrupal_list_friendship_certificates',
+    'access arguments' => array('administer drupaltodrupal'),
+    'type' => MENU_DEFAULT_LOCAL_TASK,
+    'weight' => 1,
+  );
+  $items['admin/drupaltodrupal/database/outgoing_requests'] = array(
+    'title' => 'Outgoing Requests',
+    'page callback' => 'drupaltodrupal_show_outgoing_requests',
+    'access arguments' => array('administer drupaltodrupal'),
+    'type' => MENU_LOCAL_TASK,
+    'weight' => 2,
+  );
+  $items['admin/drupaltodrupal/database/friends'] = array(
+    'title' => 'Friends',
+    'page callback' => 'drupaltodrupal_list_friends',
+    'access arguments' => array('administer drupaltodrupal'),
+    'type' => MENU_LOCAL_TASK,
+    'weight' => 3,
+  );
+  $items['admin/drupaltodrupal/database/instances'] = array(
+    'title' => 'Instances',
+    'page callback' => 'drupaltodrupal_list_instances_details',
+    'access arguments' => array('administer drupaltodrupal'),
+    'type' => MENU_LOCAL_TASK,
+    'weight' => 4,
+  );
+  $items['admin/drupaltodrupal/incoming_requests'] = array(
+    'title' => 'Incoming Requests',
+    'page callback' => 'drupaltodrupal_show_incoming_requests',
+    'access arguments' => array('administer drupaltodrupal'),
+    'type' => MENU_LOCAL_TASK,
+    'weight' => 30,
+  );
+  $items['admin/drupaltodrupal/list_friends_of_friends'] = array(
+    'title' => 'Friends of friends',
+    'page callback' => 'drupaltodrupal_list_friends_of_friends',
+    'access arguments' => array('administer drupaltodrupal'),
+    'type' => MENU_LOCAL_TASK,
+    'weight' => 40,
+  );
+  // XXX
+  $items['admin/drupaltodrupal/g_and_p'] = array(
+    'title' => 'Groups & Permissions',
+    'page callback' => 'drupaltodrupal_manage_groups',
+    'access arguments' => array('administer drupaltodrupal'),
+    'type' => MENU_LOCAL_TASK,
+    'weight' => 50,
+  );
+  $items['admin/drupaltodrupal/g_and_p/groups'] = array(
+    'title' => 'Groups',
+    'page callback' => 'drupaltodrupal_manage_groups',
+    'access arguments' => array('administer drupaltodrupal'),
+    'type' => MENU_DEFAULT_LOCAL_TASK,
+    'weight' => 1,
+  );
+  $items['admin/drupaltodrupal/g_and_p/permissions'] = array(
+    'title' => 'Permissions',
+    'page callback' => 'drupaltodrupal_manage_permissions',
+    'access arguments' => array('administer drupaltodrupal'),
+    'type' => MENU_LOCAL_TASK,
+    'weight' => 2,
+  );
+
+
+  $items['admin/drupaltodrupal/g_and_p/groups/edit'] = array(
+    'title' => 'Edit Group',
+    'page callback' => 'drupaltodrupal_edit_group',
+    'page arguments' => array(5),
+    'access arguments' => array('administer drupaltodrupal'),
+    'type' => MENU_LOCAL_TASK,
+  );
+  $items['admin/drupaltodrupal/settings'] = array(
+    'title' => 'Settings',
+    'page callback' => 'drupaltodrupal_show_settings',
+    'access arguments' => array('administer drupaltodrupal'),
+    'type' => MENU_LOCAL_TASK,
+    'weight' => 60,
+  );
+  $items['admin/config/drupaltodrupal/settings'] = array(
+    'title' => 'Drupal-to-Drupal Settings',
+    'description' => 'Change how Drupal-to-Drupal behaves',
+    'page callback' => 'drupaltodrupal_show_settings',
+    'access arguments' => array('administer drupaltodrupal'),
+    'type' => MENU_NORMAL_ITEM,
+  );
+  return $items;
+}
+
+function drupaltodrupal_form_send_requests() {
+  $form = array();
+  $form['submit'] = array(
+    '#type' => 'submit', 
+    '#value' => 'Send all open requests now',
+  );
+  return $form;
+}
+function drupaltodrupal_form_send_requests_submit($form, &$form_state) {
+  drupaltodrupal_remove_old_database_entries();
+  drupaltodrupal_add_renew_requests();
+  drupaltodrupal_send_requests();
+}
+
+
+/**
+ * Implements hook_forms().
+ */
+function drupaltodrupal_forms($form_id, $args) {
+  $args[2] = 1;
+  $forms = array();
+  if (strpos($form_id, 'drupaltodrupal_form_accept_incoming_request_') === 0) {
+    $forms[$form_id] = array(
+      'callback' => 'drupaltodrupal_form_accept_incoming_request',
+      'callback arguments' => array(substr($form_id, strlen('drupaltodrupal_form_accept_incoming_request_'))),
+    );
+  }
+  elseif (strpos($form_id, 'drupaltodrupal_form_ignore_incoming_request_') === 0) {
+    $forms[$form_id] = array(
+      'callback' => 'drupaltodrupal_form_ignore_incoming_request',
+      'callback arguments' => array(substr($form_id, strlen('drupaltodrupal_form_ignore_incoming_request_'))),
+    );
+  }
+  elseif (strpos($form_id, 'drupaltodrupal_form_ignore_all_incoming_requests_') === 0) {
+    $forms[$form_id] = array(
+      'callback' => 'drupaltodrupal_form_ignore_all_incoming_requests',
+      'callback arguments' => array(substr($form_id, strlen('drupaltodrupal_form_ignore_all_incoming_requests_'))),
+    );
+  }
+  return $forms;
+}
+/**
+ * Implements hook_cron().
+ */
+function drupaltodrupal_cron() {
+  drupaltodrupal_remove_old_database_entries(FALSE);
+  drupaltodrupal_add_renew_requests();
+  drupaltodrupal_send_requests(FALSE);
+  watchdog('Drupal-To-Drupal', 'cron');
+}
+/**
+ * Implements hook_permission().
+ */
+function drupaltodrupal_permission() {
+  return array(
+    'administer drupaltodrupal' => array(
+      'title' => t('administer Drupal-to-Drupal'),
+    ),
+  );
+}
+
+/**
+ * Implements hook_theme().
+ */
+function drupaltodrupal_theme() {
+  return array(
+    'drupaltodrupal_list_permissions' => array(
+      'render element' => 'form',
+    ),
+  );
+}
+
