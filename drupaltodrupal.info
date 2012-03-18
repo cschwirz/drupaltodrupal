@@ -1,8 +1,9 @@
 name = Drupal-To-Drupal
 description = "A module to establish friendship between Drupal instances via Peer-to-Peer"
-package = Pro Drupal Development
+package = Drupal-To-Drupal
 core = 7.x
 php = 5.3
+
 files[] = drupaltodrupal.module
 files[] = drupaltodrupal.install
 configure=admin/config/drupaltodrupal/settings
