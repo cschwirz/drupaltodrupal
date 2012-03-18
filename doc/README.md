@@ -1,7 +1,8 @@
 # Drupal-to-Drupal
 
+## Intro ##
+
 For a general introduction to Drupal-to-Drupal refer to the README file in the top directory.
----
 
 ## D2D in action ##
 
