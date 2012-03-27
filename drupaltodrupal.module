@@ -27,6 +27,8 @@ require_once 'includes/drupaltodrupal.show_outgoing_requests.inc';
 require_once 'includes/drupaltodrupal.show_settings.inc';
 require_once 'includes/drupaltodrupal.srpc.inc';
 
+class DrupalToDrupalRemoteException extends Exception { }
+
 function drupaltodrupal_id_load($ids) {
   $ids = preg_split("/_/", $ids, 2);
   if (empty($ids) || sizeof($ids) > 2) {
@@ -254,7 +256,7 @@ function drupaltodrupal_form_send_requests() {
 function drupaltodrupal_form_send_requests_submit($form, &$form_state) {
   drupaltodrupal_remove_old_database_entries();
   drupaltodrupal_add_renew_requests();
-  drupaltodrupal_send_requests();
+  drupaltodrupal_send_requests(FALSE);
 }
 
 
@@ -290,7 +292,7 @@ function drupaltodrupal_forms($form_id, $args) {
 function drupaltodrupal_cron() {
   drupaltodrupal_remove_old_database_entries(FALSE);
   drupaltodrupal_add_renew_requests();
-  drupaltodrupal_send_requests(FALSE);
+  drupaltodrupal_send_requests(FALSE, FALSE);
   watchdog('Drupal-To-Drupal', 'cron');
 }
 /**

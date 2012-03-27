@@ -16,7 +16,7 @@ function drupaltodrupal_form_add_instance() {
     '#description' => t('Address of the instance'),
     '#default_value' => variable_get('drupaltodrupal_default_request'),
     '#size' => 40,
-    '#maxlength' => 128,
+    '#maxlength' => DRUPALTODRUPAL_INSTANCE_DESCRIPTION_MAX_LENGTH,
     '#required' => TRUE,
   );
   $form['description'] = array(
@@ -36,7 +36,7 @@ function drupaltodrupal_form_add_instance() {
 }
 function drupaltodrupal_form_add_instance_validate($form, &$form_state) {
   if (!drupaltodrupal_check_url($form_state['values']['address'])) {
-    form_set_error('receiver', t('Address must start with \'http://\' or \'https://\' and end with \'/\'.'));
+    form_set_error('address', t('Address must start with \'http://\' or \'https://\' and end with \'/\'.'));
   }
   else {
     if ($record = db_query('SELECT id FROM {drupaltodrupal_instances} WHERE url=:url', array(':url' => $form_state['values']['address']))->fetchAssoc()) {

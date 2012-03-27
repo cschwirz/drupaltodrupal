@@ -151,3 +151,9 @@ function drupaltodrupal_check_convert_int(&$x) {
     return TRUE;
   }
 }
+function drupaltodrupal_bool_to_int($b) {
+  if ($b) {
+    return 1;
+  }
+  return $b === NULL ? NULL : 0;
+}

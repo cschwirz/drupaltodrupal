@@ -354,7 +354,7 @@ function drupaltodrupal_remove_old_database_entries($verbose = TRUE) {
     }
   }
 }
-function drupaltodrupal_send_requests($verbose = TRUE) {
+function drupaltodrupal_send_requests($out_id, $verbose = TRUE) {
   // get information about this instance, private key.
   drupaltodrupal_get_self_instance($id_b, $entity_b, $public_key_b);
   $private_key_b = variable_get('drupaltodrupal_private_key');
@@ -364,6 +364,9 @@ function drupaltodrupal_send_requests($verbose = TRUE) {
   }
 
   foreach ($ids as $outreq_id) {
+    if ($out_id !== FALSE && $outreq_id != $out_id) {
+      continue;
+    }
     if ($verbose) {
       drupal_set_message(t('Processing outgoing request with id @id.', array('@id' => $outreq_id)));
     }
@@ -509,72 +512,6 @@ function drupaltodrupal_send_requests($verbose = TRUE) {
     }
   }
 }
-
-function drupaltodrupal_send_request($outreq_id, $entity_b, $private_key_b) {
-  $result = db_query('SELECT o.email as email, o.message as message, o.state as state, o.reply as reply, i.url as i_url, b.public_key as i_public_key, f.valid as f_valid, f.valid_until as f_valid_until, f.certificate as f_certificate FROM {drupaltodrupal_outgoing_requests} o, {drupaltodrupal_friendship_certificates} f, {drupaltodrupal_instances} i LEFT OUTER JOIN {drupaltodrupal_public_keys} p ON p.id = i.public_key_id WHERE o.outreq_id = :outreq_id AND f.fcert_id = o.id_offer AND i.id = f.id_friend', array(':outreq_id' => $outreq_id));
-  $record = $result->fetchObject();
-  drupal_set_message("outreq_id = {$outreq_id}");
-  if (!$record) {
-    drupal_set_message(t('ID @id could not be found.', array('@id' => $outreq_id)), 'error');
-  }
-  else {
-    $public_key_a = $record->i_public_key;
-    $entity_a = $record->i_url;
-    if (is_null($public_key_a)) {
-      drupal_set_message(t('Public key of entity A is null'), 'error');
-      return;
-    }
-    if (is_null($record->f_certificate) || !$record->f_certificate || is_null($record->f_certificate)) {
-      drupal_set_message(t('Certificate is not complete'), 'error');
-      return;
-    }
-    /*
-    if ($record->f_valid_until < time() + 3600) { // TODO
-      drupal_set_message('certificate will be invalid soon', 'error');
-      return;
-    }
-    */
-    $request = array(
-      'type' => 'request',
-      'version' => drupaltodrupal_get_version(),
-      'a' => $entity_a,
-      'b' => $entity_b,
-      'c' => '',
-      'certificate_cb' => '',
-      'until_cb' => '',
-      'certificate_ba' => $record->f_certificate,
-      'until_ba' => $record->f_valid_until,
-      'mail' => $record->email,
-      'message' => $record->message,
-      'time' => time(),
-      'tok' => 42,
-    );
-    $imploded_request = drupaltodrupal_implode($request);
-    if ($imploded_request === FALSE) {
-      return;
-    }
-    // encrypt request
-    if (!drupaltodrupal_encrypt($imploded_request, $encrypted_request, $public_key_a)) {
-      drupal_set_message(t('Failed encryption!'));
-      return;
-    }
-    // sign encrypted request
-    $signed_request = drupaltodrupal_sign($encrypted_request, $private_key_b, $entity_b);
-    if ($signed_request === FALSE) {
-      drupal_set_message(t('Failed signing!'));
-      return;
-    }
-    $server_a = url($entity_a . "/xmlrpc.php");
-    drupal_set_message('request will be sent');
-    $result = xmlrpc($server_a, array('drupalToDrupal.requestFriendship' => array(base64_encode($signed_request), drupaltodrupal_get_version())), drupaltodrupal_xmlrpc_options());
-    if ($result === FALSE) {
-      drupal_set_message(t("Error return from xmlrpc(): Error: @errno, Message: @message", array('@errno' => xmlrpc_errno(), '@message' => xmlrpc_error_msg())));
-    }
-    else {
-      drupal_set_message(t("The XMLRPC server returned this response: @response", array('@response' => print_r($result, TRUE))));
-    }
-  }
-}
 function drupaltodrupal_get_groups() {
   $result = db_query('SELECT id, name, description FROM {drupaltodrupal_groups}');
   $records = $result->fetchAll();
@@ -697,4 +634,108 @@ function drupaltodrupal_add_renew_requests() {
     ))->execute();
   }
 }
+function drupaltodrupal_blindly_add_friend($url, $description, $verbose=FALSE) {
+  if ($record = db_query('SELECT id, url FROM {drupaltodrupal_instances} WHERE url=:url', array(':url' => $url))->fetchAssoc()) {
+    $id = $record['id'];
+    $url = $record['url'];
+  }
+  else {
+    $id = db_insert('drupaltodrupal_instances')->fields(array(
+        'url' => $url,
+        'description' => $description,
+        'time_inserted' => drupaltodrupal_get_time(),
+        'public_key_id' => null,
+      ))->execute();
+    drupaltodrupal_set_default_group_memberships($id);
+  }
+  $public_key = xmlrpc($url. '/xmlrpc.php', array('drupalToDrupal.getPublicKey' => array()));
+  if ($public_key === FALSE) {
+    return FALSE;
+  }
+  else {
+    $result = db_query('SELECT id as id FROM {drupaltodrupal_public_keys} WHERE id_instance=:id AND public_key=:public_key', array(':id' => $id, ':public_key' => $public_key));
+    if ($record = $result->fetchObject()) {
+      $id_pk = $record->id;
+    }
+    else {
+      $id_pk = db_insert('drupaltodrupal_public_keys')->fields(array(
+            'id_instance' => $id,
+            'public_key' => $public_key,
+      ))->execute();
+    }
+    drupaltodrupal_invalidate($id);
+    $num_updated = db_update('drupaltodrupal_instances')
+      ->fields(array('public_key_id' => $id_pk,))
+      ->condition('id', $id)
+      ->execute();
+    drupaltodrupal_validate($id);
+  }
+  drupaltodrupal_get_self_instance($id_b, $entity_b, $public_key_b);
+  $entity_a = $url;
+  $id_a = $id;
 
+  // Time until when the new friendship should be valid.
+  $until_ba = drupaltodrupal_get_time() + variable_get('drupaltodrupal_validity', DRUPALTODRUPAL_VALIDITY_DEFAULT) * 60;
+  $friendship_ba = drupaltodrupal_get_friendship_string($entity_b, $entity_a, $until_ba);
+  $private_key_b = variable_get('drupaltodrupal_private_key');
+  if (is_null($friendship_ba)) {
+    $certificate_ba = null;
+  }
+  else {
+    if (!openssl_sign($friendship_ba, $certificate_ba, $private_key_b)) {
+      $certificate_ba = null;
+    }
+    else {
+    }
+  }
+  $id_ba = db_insert('drupaltodrupal_friendship_certificates')->fields(array(
+    'id_signer' => $id_b,
+    'id_friend' => $id_a,
+    'time_inserted' => drupaltodrupal_get_time(),
+    'valid' => is_null($certificate_ba) ? null : TRUE,
+    'valid_until' => $until_ba,
+    'certificate' => $certificate_ba,
+  ))->execute();
+  // Insert outgoing request. 
+  $insert_time = drupaltodrupal_get_time();
+  $outreq_id = db_insert('drupaltodrupal_outgoing_requests')->fields(array(
+    'id_offer' => $id_ba,
+    'id_common_friend' => null,
+    'email' => variable_get('site_mail', 'N/A'),
+    'message' => 'no message given',
+    'time_inserted' => $insert_time,
+    'state' => 0,
+    'reply' => null,
+    'next_send' => $insert_time,
+    'type' => 0, // request
+  ))->execute();
+  drupaltodrupal_send_requests($outreq_id, FALSE);
+  $error_string = '';
+  $friend = array(
+   'id' => $id_a,
+   'url' => $entity_a,
+   'public_key' => $public_key,
+  );
+  $error_string = '';
+  $res = drupaltodrupal_call_secure_rpc($friend, 'drupaltodrupal_get_friendship_certificate', array(), $error_string);
+  if ($res === FALSE) {
+    if ($verbose) {
+      drupal_set_message($error_string, 'error');
+    }
+  }
+  else {
+    $exploded_result = drupaltodrupal_explode($res);
+    if ($exploded_result !== FALSE && drupaltodrupal_check_array($exploded_result, array('friendship_certificate' => 'is_string', 'valid_until' => 'drupaltodrupal_check_convert_int'))) {
+      if (openssl_verify(drupaltodrupal_get_friendship_string($entity_a, $entity_b, $exploded_result['valid_until']), $exploded_result['friendship_certificate'], $public_key) === 1) {
+        $id_ba = db_insert('drupaltodrupal_friendship_certificates')->fields(array(
+          'id_signer' => $id_a,
+          'id_friend' => $id_b,
+          'time_inserted' => drupaltodrupal_get_time(),
+          'valid' => TRUE,
+          'valid_until' => $exploded_result['valid_until'],
+          'certificate' => $exploded_result['friendship_certificate'],
+        ))->execute();
+      }
+    }
+  }
+}

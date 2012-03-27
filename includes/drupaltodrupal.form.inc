@@ -79,6 +79,12 @@ function drupaltodrupal_form_settings() {
     '#maxlength' => 10,
     '#required' => TRUE,
   );
+  $form['auto_accept'] = array(
+    '#type' => 'checkbox',
+    '#default_value' => variable_get('drupaltodrupal_auto_accept', DRUPALTODRUPAL_AUTO_ACCEPT),
+    '#title' => t('Automatically accept incoming friendship requests'),
+    '#description' => t('On friendship request, automatically pull public key, add it to the database and accept friendship request.'),
+  );
   $form['submit'] = array(
     '#type' => 'submit', 
     '#value' => t('Save'),
@@ -167,5 +173,6 @@ function drupaltodrupal_form_settings_submit($form, &$form_state) {
   variable_set('drupaltodrupal_garbage_time', $garbage);
   variable_set('drupaltodrupal_delta_0', $delta0);
   variable_set('drupaltodrupal_delta_1', $delta1);
+  variable_set('drupaltodrupal_auto_accept', $form_state['values']['auto_accept'] ? TRUE : FALSE);
   drupal_set_message(t('Settings have been saved.'));
 }

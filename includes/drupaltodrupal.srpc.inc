@@ -1,4 +1,5 @@
 <?php
+
 function drupaltodrupal_srpc_list_friends($arguments, $rpc_info) {
   $friends = drupaltodrupal_get_friends();
   $return_array = array();
@@ -58,6 +59,25 @@ function drupaltodrupal_srpc_list_permissions($arguments, $rpc_info) {
   }
   return $imploded_return_array;
 }
+function drupaltodrupal_srpc_get_friendship_certificate($arguments, $rpc_info) {
+  watchdog('Drupal-to-Drupal', 'get_fc');
+  drupaltodrupal_get_self_instance($id, $entity, $public_key);
+  $result = db_query('SELECT certificate, valid_until FROM {drupaltodrupal_friendship_certificates} WHERE id_signer=:id_signer AND id_friend=:id_friend AND VALID=1 ORDER BY valid_until DESC', array(':id_signer' => $id, ':id_friend' => $rpc_info['id'])); // TODO
+  if ($record = $result->fetchObject()) {
+    watchdog('Drupal-to-Drupal', 'valid until' . $record->valid_until);
+    $imploded_array = drupaltodrupal_implode(
+      array(
+        'friendship_certificate' => $record->certificate,
+        'valid_until' => $record->valid_until,
+      )
+    );
+    if ($imploded_array === FALSE) {
+      return '';
+    }
+    return $imploded_array;
+  }
+  return '';
+}
 
 /**
  * Implements hook_drupaltodrupal_secure_rpc().
@@ -80,6 +100,11 @@ function drupaltodrupal_drupaltodrupal_secure_rpc() {
     'arguments' => array(),
     'callback' => 'drupaltodrupal_srpc_list_permissions',
     'description' => 'returns the methods the invocing friend may call',
+  );
+  $methods['drupaltodrupal_get_friendship_certificate'] = array(
+    'arguments' => array(),
+    'callback' => 'drupaltodrupal_srpc_get_friendship_certificate',
+    'description' => 'returns the latest friendship certificate',
   );
   // TODO: fictious functions
   /*

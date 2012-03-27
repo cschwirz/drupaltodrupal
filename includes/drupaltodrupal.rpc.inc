@@ -292,7 +292,6 @@ function drupaltodrupal_secure_rpc($request64, $version) {
     return xmlrpc_error(0, 'failed explosion of arguments');
   }
   if (!drupaltodrupal_check_array($exploded_arguments, $argument_checks)) {
-//    watchdog('Drupal-to-Drupal', var_export($exploded_arguments, TRUE));
     return xmlrpc_error(0, 'arguments failed check');
   }
   $rpc_info = array(
@@ -301,7 +300,12 @@ function drupaltodrupal_secure_rpc($request64, $version) {
     'public_key' => $public_key_b,
     'ip' => $_SERVER['REMOTE_ADDR'],
   );
-  $ret = call_user_func($callback, $exploded_arguments, $rpc_info);
+  try {
+    $ret = call_user_func($callback, $exploded_arguments, $rpc_info);
+  }
+  catch (DrupalToDrupalRemoteException $e) {
+    return xmlrpc_error(0, $e->getMessage());
+  }
   if (!is_string($ret)) {
     return xmlrpc_error(0, 'called function did not return string');
   }
@@ -337,6 +341,107 @@ function drupaltodrupal_secure_rpc($request64, $version) {
 function drupaltodrupal_get_public_key() {
   drupaltodrupal_get_self_instance($id, $url, $public_key);
   return $public_key;
+}
+
+// TODO: used for showcase, basically copy & paste from
+//  drupaltodrupal.show_incoming_requests.inc
+function drupaltodrupal_accept_request_by_id($id) {
+  $result = db_query(
+      'SELECT'
+    . ' r.inreq_id as inreq_id,'
+    . ' r.id_offer as id_offer,'
+    . ' r.email as email,'
+    . ' r.message as message,'
+    . ' r.time_sent as time_sent,'
+    . ' r.time_received as time_received,'
+    . ' r.ip as ip,'
+    . ' r.request as request,'
+    . ' r.signature as signature,'
+    . ' r.valid as signature_valid,'
+    . ' r.state as state,'
+    . ' r.type as type,'
+    . ' f1.valid as certificate_ab_valid,'
+    . ' f1.valid_until as valid_ab_until,'
+    . ' i.url as url,'
+    . ' i.description as description,'
+    . ' p.public_key as public_key,'
+    . ' i.id as requester_id'
+    . ' FROM'
+    . ' {drupaltodrupal_incoming_requests} r,'
+    . ' {drupaltodrupal_friendship_certificates} f1,'
+    . ' {drupaltodrupal_instances} i'
+    . ' LEFT OUTER JOIN'
+    . ' {drupaltodrupal_public_keys} p'
+    . ' ON'
+    . ' i.public_key_id = p.id'
+    . ' WHERE'
+    . ' r.id_offer = f1.fcert_id'
+    . ' AND f1.id_signer = i.id'
+    . ' AND r.state = 0'
+    . ' AND r.inreq_id = :i',
+    array(':i' => $id)
+  );
+  if ($result->rowCount() == 0) {
+    return;
+  }
+  $record = $result->fetchObject();
+  $acceptable = $record->signature_valid && $record->certificate_ab_valid && $record->valid_ab_until > drupaltodrupal_get_time();
+  if (!$acceptable) {
+    return;
+  }
+  drupaltodrupal_get_self_instance($id_b, $entity_b, $public_key_b);
+  $entity_a = $record->url;
+  $id_a = $record->requester_id;
+  $public_key_a = $record->public_key;
+  // {{{ Insert certificate for friendship into database.
+  // Time until when the new friendship should be valid.
+  // TODO: make this time variable
+  // TODO: different duration depending on time in request?
+  $until_ba = drupaltodrupal_get_time() + variable_get('drupaltodrupal_validity', '40') * 60;
+  if (is_null($public_key_a)) {
+    $friendship_ba = null;
+  }
+  else {
+    $friendship_ba = drupaltodrupal_get_friendship_string($entity_b, $entity_a, $until_ba);
+  }
+  $private_key_b = variable_get('drupaltodrupal_private_key');
+  if (is_null($friendship_ba)) {
+    $certificate_ba = null;
+  }
+  else {
+    if (!openssl_sign($friendship_ba, $certificate_ba, $private_key_b)) {
+      $certificate_ba = null;
+    }
+    else {
+    }
+  }
+  $id_ba = db_insert('drupaltodrupal_friendship_certificates')->fields(array(
+    'id_signer' => $id_b,
+    'id_friend' => $id_a,
+    'time_inserted' => drupaltodrupal_get_time(),
+    'valid' => is_null($certificate_ba) ? null : TRUE,
+    'valid_until' => $until_ba,
+    'certificate' => $certificate_ba,
+  ))->execute();
+  // }}}
+  $insert_time = drupaltodrupal_get_time();
+  $outreq_id = db_insert('drupaltodrupal_outgoing_requests')->fields(array(
+    'id_offer' => $id_ba,
+    'id_common_friend' => null,
+    'email' => variable_get('site_mail', 'N/A'),
+    'message' => 'request accepted',
+    'time_inserted' => $insert_time,
+    'state' => 0,
+    'reply' => null,
+    'next_send' => $insert_time,
+    'type' => 1, // reply
+  ))->execute();
+  $num_updated = db_update('drupaltodrupal_incoming_requests')
+    ->fields(array(
+      'state' => 1,
+    ))
+    ->condition('inreq_id', $id)
+    ->execute();
 }
 /**
  * Process friendship request.
@@ -539,6 +644,14 @@ function drupaltodrupal_request_friendship($request64, $version) {
       $certificate_ba_verified = true;
     }
   }
+  if ($certificate_ba_verified === FALSE) {
+    // if auto accept requests, an incoming request which can not be verified means
+    // that is was signed with a public key that is not in the database, hence
+    // set public key to NULL.
+    if (variable_get('drupaltodrupal_auto_accept', DRUPALTODRUPAL_AUTO_ACCEPT)) {
+      $public_key_b = NULL;
+    }
+  }
 
   // TODO
   // check certificate for friendship between A and C (if provided)
@@ -572,7 +685,7 @@ function drupaltodrupal_request_friendship($request64, $version) {
         'public_key_id' => null,
       ))->execute();
     drupaltodrupal_set_default_group_memberships($id_b);
-    // TODO?
+    // TODO: should not be needed.
     if ($public_key_b !== null) {
       $id_pk = db_insert('drupaltodrupal_public_keys')->fields(array(
         'id_instance' => $id_b,
@@ -600,9 +713,7 @@ function drupaltodrupal_request_friendship($request64, $version) {
       }
     }
     if ($public_key_c) {
-      watchdog('Drupal-to-Drupal', 'friends');
       if (openssl_verify(drupaltodrupal_get_friendship_string($entity_c, $entity_b, $until_cb), $certificate_cb, $public_key_c) === 1) {
-        watchdog('Drupal-to-Drupal', 'certificate okay');
         $result = db_query('SELECT fcert_id FROM {drupaltodrupal_friendship_certificates} WHERE id_signer=:id_signer AND id_friend=:id_friend AND valid=:valid AND valid_until=:valid_until AND certificate=:certificate', array(':id_signer' => $id_c, ':id_friend' => $id_b, ':valid' => 1, ':valid_until' => $until_cb, ':certificate' => $certificate_cb));
         if ($record = $result->fetchAssoc()) {
           $id_cb = $record['fcert_id'];
@@ -620,7 +731,6 @@ function drupaltodrupal_request_friendship($request64, $version) {
       }
       else {
         $id_c = null;
-        watchdog('Drupal-to-Drupal', 'certificate not okay');
       }
     }
     else {
@@ -636,12 +746,12 @@ function drupaltodrupal_request_friendship($request64, $version) {
       'id_signer' => $id_b,
       'id_friend' => $id_a,
       'time_inserted' => drupaltodrupal_get_time(),
-      'valid' => $certificate_ba_verified,
+      'valid' => drupaltodrupal_bool_to_int($certificate_ba_verified),
       'valid_until' => $until_ba,
       'certificate' => $certificate_ba,
     ))->execute();
   }
-  $id = db_insert('drupaltodrupal_incoming_requests')->fields(array(
+  $incoming_id = db_insert('drupaltodrupal_incoming_requests')->fields(array(
     'id_offer' => $id_ba,
     'id_common_friend' => $id_c,
     'email' => $email,
@@ -651,7 +761,7 @@ function drupaltodrupal_request_friendship($request64, $version) {
     'ip' => $_SERVER['REMOTE_ADDR'],
     'request' => $encrypted_data,
     'signature' => $signature,
-    'valid' => $signature_verified,
+    'valid' => drupaltodrupal_bool_to_int($signature_verified),
     'state' => ($type_id != 0 && $signature_verified && $certificate_ba_verified ? 1 : 0),
     'type' => $type_id,
   ))->execute();
@@ -662,6 +772,32 @@ function drupaltodrupal_request_friendship($request64, $version) {
     else {
       return 16;
     }
+  }
+  if (variable_get('drupaltodrupal_auto_accept', DRUPALTODRUPAL_AUTO_ACCEPT)) {
+    $url = $entity_b;
+    if (!$public_key_b) {
+      $public_key_b = xmlrpc($url. '/xmlrpc.php', array('drupalToDrupal.getPublicKey' => array()));
+      if ($public_key_b === FALSE) {
+        return 0;
+      }
+    }
+    $result = db_query('SELECT id as id FROM {drupaltodrupal_public_keys} WHERE id_instance=:id AND public_key=:public_key', array(':id' => $id_b, ':public_key' => $public_key_b));
+    if ($record = $result->fetchObject()) {
+      $id_pk = $record->id;
+    }
+    else {
+      $id_pk = db_insert('drupaltodrupal_public_keys')->fields(array(
+        'id_instance' => $id_b,
+        'public_key' => $public_key_b,
+      ))->execute();
+    }
+    drupaltodrupal_invalidate($id_b);
+    $num_updated = db_update('drupaltodrupal_instances')
+      ->fields(array('public_key_id' => $id_pk,))
+      ->condition('id', $id_b)
+      ->execute();
+    drupaltodrupal_validate($id_b);
+    drupaltodrupal_accept_request_by_id($incoming_id);
   }
   return 0;
 }

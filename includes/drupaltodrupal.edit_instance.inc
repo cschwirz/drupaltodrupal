@@ -303,7 +303,7 @@ function drupaltodrupal_form_add_friendship_request_submit($form, &$form_state) 
   $id_a = $form_state['values']['id'];
 //  $entity_a = $form_state['values']['receiver']; // receiver of the friendship request
 
-  // {{{ Insert instance into database.
+  // {{{ 
   $result = db_query('SELECT i.url as url, p.public_key as public_key FROM {drupaltodrupal_instances} i LEFT OUTER JOIN {drupaltodrupal_public_keys} p ON i.public_key_id = p.id WHERE i.id=:id', array(':id' => $id_a));
   $public_key_a = null;
   if (!$row = $result->fetchAssoc()) {

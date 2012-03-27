@@ -42,7 +42,7 @@ function drupaltodrupal_install() {
       'description' => 'N/A',
       'auto_member' => 1,
     ))->execute();
-  foreach (array('drupaltodrupal_get_friends', 'drupaltodrupal_get_public_key', 'drupaltodrupal_list_permissions') as $method_name) {
+  foreach (array('drupaltodrupal_get_friends', 'drupaltodrupal_get_public_key', 'drupaltodrupal_list_permissions', 'drupaltodrupal_get_friendship_certificate') as $method_name) {
     $m_id = db_insert('drupaltodrupal_permissions')->fields(array(
       'group_id' => $group_id,
       'method' => $method_name,
@@ -58,6 +58,8 @@ function drupaltodrupal_install() {
   variable_set('drupaltodrupal_garbage_time', DRUPALTODRUPAL_GARBAGE_TIME_DEFAULT);
   variable_set('drupaltodrupal_delta_0', DRUPALTODRUPAL_DELTA_0_DEFAULT);
   variable_set('drupaltodrupal_delta_1', DRUPALTODRUPAL_DELTA_1_DEFAULT);
+  variable_set('drupaltodrupal_delta_1', DRUPALTODRUPAL_DELTA_1_DEFAULT);
+  variable_set('drupaltodrupal_auto_accept', DRUPALTODRUPAL_AUTO_ACCEPT);
   
   variable_set('drupaltodrupal_default_request',
     $GLOBALS['base_url'] === 'http://localhost/drupal_a'
@@ -80,6 +82,7 @@ function drupaltodrupal_uninstall() {
   variable_del('drupaltodrupal_garbage_time');
   variable_del('drupaltodrupal_delta_0');
   variable_del('drupaltodrupal_delta_1');
+  variable_del('drupaltodrupal_auto_accept');
   drupal_uninstall_schema('drupaltodrupal');
 }
 
